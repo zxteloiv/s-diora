@@ -1,23 +1,13 @@
-import math
 import torch
 import torch.nn as nn
-import numpy as np
-
-from outside_index import get_outside_index, OutsideIndexCheck
-from inside_index import get_inside_index, InsideIndexCheck
-from inside_index import get_inside_index_unique
-from offset_cache import get_offset_cache
-
-from inside_index import get_inside_components
-from outside_index import get_outside_components
-
-from base_model import *
+from base_model import DioraBase
 
 TINY = 1e-8
 
+from net_utils import get_inside_states, inside_fill_chart
+from net_utils import get_outside_states, outside_fill_chart
 
 # Composition Functions
-
 class ComposeMLP(nn.Module):
     def __init__(self, size, activation, n_layers=2, leaf=False, side_1_size=None, side_2_size=None):
         super(ComposeMLP, self).__init__()
@@ -58,10 +48,8 @@ class ComposeMLP(nn.Module):
         for i, param in enumerate(params):
             param.data.normal_()
 
-    def leaf_transform(self, x, side=None):
+    def leaf_transform(self, x):
         h = torch.tanh(torch.matmul(x, self.V) + self.B)
-        device = torch.cuda.current_device() if self.is_cuda else None
-
         return h
 
     def forward(self, hs, constant=1.0, side_1=None, side_2=None):
@@ -76,8 +64,6 @@ class ComposeMLP(nn.Module):
             W = getattr(self, 'W_{}'.format(i))
             B = getattr(self, 'B_{}'.format(i))
             h = self.activation(torch.matmul(h, W) + B)
-
-        device = torch.cuda.current_device() if self.is_cuda else None
 
         return h
 
@@ -109,17 +95,12 @@ class Bilinear(nn.Module):
 
 
 # Base
-
 class DioraMLP(DioraBase):
     K = 1
 
     def __init__(self, *args, **kwargs):
         self.n_layers = kwargs.get('n_layers', None)
         super(DioraMLP, self).__init__(*args, **kwargs)
-
-    @classmethod
-    def from_kwargs_dict(cls, context, kwargs_dict):
-        return cls(**kwargs_dict)
 
     def init_parameters(self):
         # Model parameters for transformation required at both input and output
@@ -134,4 +115,56 @@ class DioraMLP(DioraBase):
 
         self.inside_compose_func = ComposeMLP(self.size, self.activation, n_layers=self.n_layers, leaf=True)
         self.outside_compose_func = ComposeMLP(self.size, self.activation, n_layers=self.n_layers)
+
+    def inside_func(self, batch_info):
+        B = batch_info.batch_size
+        L = batch_info.length - batch_info.level
+        N = batch_info.level
+        chart, index = self.chart, self.index
+
+        lh, rh = get_inside_states(batch_info, chart['inside_h'], index, batch_info.size)
+        ls, rs = get_inside_states(batch_info, chart['inside_s'], index, 1)
+
+        h = self.inside_compose_func([lh, rh])
+        xs = self.inside_score_func(lh, rh)
+
+        s = xs + ls + rs
+        s = s.view(B, L, N, 1)
+        p = torch.softmax(s, dim=2)
+
+        hbar = torch.sum(h.view(B, L, N, -1) * p, 2)
+        hbar = self.inside_normalize_func(hbar)
+        sbar = torch.sum(s * p, 2)
+
+        inside_fill_chart(batch_info, chart, index, hbar, sbar)
+
+        return h, s, p, xs, ls, rs
+
+    def outside_func(self, batch_info):
+        index = self.index
+        chart = self.chart
+
+        B = batch_info.batch_size
+        L = batch_info.length - batch_info.level
+
+        ph, sh = get_outside_states(
+            batch_info, chart['outside_h'], chart['inside_h'], index, batch_info.size)
+        ps, ss = get_outside_states(
+            batch_info, chart['outside_s'], chart['inside_s'], index, 1)
+
+        h = self.outside_compose_func([sh, ph], 0)
+        xs = self.outside_score_func(sh, ph)
+
+        s = xs + ss + ps
+        s = s.view(B, -1, L, 1)
+        p = torch.softmax(s, dim=1)
+        N = s.shape[1]
+
+        hbar = torch.sum(h.view(B, N, L, -1) * p, 1)
+        hbar = self.outside_normalize_func(hbar)
+        sbar = torch.sum(s * p, 1)
+
+        outside_fill_chart(batch_info, chart, index, hbar, sbar)
+
+        return h, s, p, xs, ps, ss
 

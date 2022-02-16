@@ -1,50 +1,7 @@
-from input_layer import *
+import torch
+import torch.nn as nn
 from help_get_diora import get_diora
 from help_get_loss_funcs import get_loss_funcs
-
-
-def check_params(source, target):
-    source_params = {n: p for n, p in source.named_parameters()}
-    target_params = {n: p for n, p in target.named_parameters()}
-    # assert len(source_params) == len(target_params)
-
-    for n, p in source_params.items():
-        if not nested_hasattr(target, n):
-            print('skipping check {}'.format(n))
-            continue
-        assert torch.all(p == target_params[n])
-
-
-def nested_getattr(o, k):
-    k_lst = k.split('.')
-    for i in range(len(k_lst)):
-        o = getattr(o, k_lst[i])
-    return o
-
-
-def nested_hasattr(o, k):
-    try:
-        _ = nested_getattr(o, k)
-        return True
-    except:
-        return False
-
-
-def nested_setattr(o, k, v):
-    k_lst = k.split('.')
-    if len(k_lst) > 1:
-        new_k = '.'.join(k_lst[:-1])
-        o = nested_getattr(o, new_k)
-    setattr(o, k_lst[-1], v)
-
-
-def copy_params(source, target):
-    for n, p in source.named_parameters():
-        if not nested_hasattr(target, n):
-            print('skipping {}'.format(n))
-            continue
-        print('copy {} {}'.format(n, p.shape))
-        nested_setattr(target, n, p)
 
 
 def get_net_components(options, context):
@@ -63,7 +20,6 @@ def get_net_components(options, context):
         options.input_dim = 768
     elif options.projection == 'mask':
         raise NotImplementedError
-        options.input_dim = embeddings.shape[1]
 
     # Embed
     projection_layer, embedding_layer = get_embed_and_project(options, embeddings, options.input_dim, options.hidden_dim, word2idx)
@@ -92,4 +48,51 @@ def get_net_components(options, context):
     components['diora'] = diora
     components['loss_funcs'] = loss_funcs
     return components
+
+
+def get_embed_and_project(options, embeddings, input_dim, size, word2idx=None, contextual=False):
+    if options.projection == 'word2vec':
+        projection_layer, embedding_layer = word2vec_projection(options, embeddings, input_dim, size, word2idx)
+    else:
+        raise NotImplementedError(f'unknown projection conf {options.projection}')
+    return projection_layer, embedding_layer
+
+
+def word2vec_projection(options, embeddings, input_dim, size, word2idx=None):
+    embedding_layer = nn.Embedding.from_pretrained(torch.from_numpy(embeddings), freeze=True)
+    elmo = None
+    projection_layer = EmbedAndProject(embedding_layer, input_size=input_dim, size=size)
+    return projection_layer, embedding_layer
+
+
+class EmbedAndProject(nn.Module):
+    def __init__(self, embeddings, input_size, size):
+        super().__init__()
+        self.input_size = input_size
+        self.size = size
+        self.embeddings = embeddings
+        self.mat = nn.Parameter(torch.FloatTensor(size, input_size))
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        params = [p for p in self.parameters() if p.requires_grad]
+        for i, param in enumerate(params):
+            param.data.normal_()
+
+    def embed(self, x):
+        """ Always context-insensitive embedding.
+        """
+        return self.embeddings(x)
+
+    def project(self, x):
+        return torch.matmul(x, self.mat.t())
+
+    def forward(self, x, info=None):
+        batch_size, length = x.shape
+
+        embed = self.embed(x)
+
+        out = embed
+
+        return self.project(out)
 

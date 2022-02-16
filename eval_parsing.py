@@ -2,14 +2,8 @@ import collections
 import json
 import os
 
-import nltk
-from nltk.treeprettyprinter import TreePrettyPrinter
-import numpy as np
 import torch
-from tqdm import tqdm
 
-from cky import ParsePredictor as CKY
-from experiment_logger import get_logger
 from evaluation_utils import BaseEvalFunc
 
 
@@ -68,7 +62,6 @@ def spans_to_tree(spans, tokens):
     spans = sorted(spans, key=lambda x: (x[1], x[0]))
 
     pos_to_node = {}
-    root_node = None
 
     for i, span in enumerate(spans):
 
@@ -103,12 +96,8 @@ def spans_to_tree(spans, tokens):
 
 
 class TreesFromDiora(object):
-    def __init__(self, diora, word2idx, outside, oracle):
+    def __init__(self, diora):
         self.diora = diora
-        self.word2idx = word2idx
-        self.idx2word = {idx: w for w, idx in word2idx.items()}
-        self.outside = outside
-        self.oracle = oracle
 
     def to_spans(self, lst):
         return [(pos, level + 1) for level, pos in lst]
@@ -117,7 +106,6 @@ class TreesFromDiora(object):
         batch_size, length = batch_map['sentences'].shape
         example_ids = batch_map['example_ids']
         tscores = [0.0] * batch_size
-        K = self.diora.K
 
         for i_b in range(batch_size):
             tokens = batch_map['ground_truth'][i_b]['tokens']
@@ -132,16 +120,10 @@ class TreesFromDiora(object):
 class ParsingComponent(BaseEvalFunc):
 
     def init_defaults(self):
-        self.agg_mode = 'sum'
-        self.cky_mode = 'sum'
         self.ground_truth = None
-        self.inside_pool = 'sum'
-        self.oracle = {'use': False}
         self.outside = True
         self.seed = 121
-        self.semi_supervised = False
         self.K = None
-        self.choose_tree = 'local'
 
     def compare(self, prev_best, results):
         out = []
@@ -173,25 +155,13 @@ class ParsingComponent(BaseEvalFunc):
         if self.K is not None:
             diora.safe_set_K(self.K)
 
-        # set choose_tree
-        if hasattr(diora, 'choose_tree'):
-            original_choose_tree = diora.choose_tree
-            diora.choose_tree = self.choose_tree
-
-        word2idx = self.dataset['word2idx']
-        if self.cky_mode == 'cky':
-            parse_predictor = CKY(net=diora, word2idx=word2idx,
-                add_bos_token=trainer.net.add_bos_token, add_eos_token=trainer.net.add_eos_token)
-        elif self.cky_mode == 'diora':
-            parse_predictor = TreesFromDiora(diora=diora, word2idx=word2idx, outside=self.outside, oracle=self.oracle)
+        parse_predictor = TreesFromDiora(diora=diora)
 
         batches = self.batch_iterator.get_iterator(random_seed=self.seed, epoch=epoch)
 
         logger.info('Parsing.')
 
         pred_lst = []
-        counter = 0
-        eval_cache = {}
 
         if self.ground_truth is not None:
             self.ground_truth = os.path.expanduser(self.ground_truth)
@@ -214,29 +184,13 @@ class ParsingComponent(BaseEvalFunc):
                     batch_ground_truth = [ground_truth_data[x] for x in example_ids]
                     batch_map['ground_truth'] = batch_ground_truth
 
-                _ = trainer.step(batch_map, train=False, compute_loss=False, info={ 'inside_pool': self.inside_pool, 'outside': self.outside })
+                trainer.step(batch_map, train=False, compute_loss=False, info={'outside': self.outside})
 
                 for j, x in enumerate(parse_predictor.predict(batch_map)):
-
                     pred_lst.append(x)
 
-                self.eval_loop_hook(trainer, diora, info, eval_cache, batch_map)
-
-        self.post_eval_hook(trainer, diora, info, eval_cache)
-
         diora.safe_set_K(original_K)
-
-        # set choose_tree
-        if hasattr(diora, 'choose_tree'):
-            diora.choose_tree = original_choose_tree
-
         return pred_lst
-
-    def eval_loop_hook(self, trainer, diora, info, eval_cache, batch_map):
-        pass
-
-    def post_eval_hook(self, trainer, diora, info, eval_cache):
-        pass
 
     def run(self, trainer, info):
         logger = self.logger

@@ -77,38 +77,6 @@ class OutsideIndex(object):
         return node2leaf
 
 
-class OutsideIndexCheck(object):
-    def __init__(self, index, length, spans, siblings):
-        sib_map = {}
-        for x, y, n in siblings:
-            sib_map[x] = (y, n)
-            sib_map[y] = (x, n)
-
-        check = {}
-        for sibling, (target, name) in sib_map.items():
-            xpos = target[0]
-            xsize = target[1] - target[0]
-            xlevel = xsize - 1
-            xoffset = index.get_offset(length)[xlevel]
-            xidx = xoffset + xpos
-
-            spos = sibling[0]
-            ssize = sibling[1] - sibling[0]
-            parent = (min(xpos, spos), min(xpos, spos) + xsize + ssize)
-
-            ppos = parent[0]
-            psize = parent[1] - parent[0]
-            plevel = psize - 1
-            poffset = index.get_offset(length)[plevel]
-            pidx = poffset + ppos
-
-            check[(pidx, xidx)] = True
-        self.check = check
-
-    def is_valid(self, pidx, xidx):
-        return (pidx, xidx) in self.check
-
-
 def get_outside_components(length, level, offset_cache=None):
     if offset_cache is None:
         offset_cache = get_offset_cache(length)
@@ -205,39 +173,3 @@ def get_topk_outside_index(length, level, K, offset_cache=None, cuda=False):
     s_index = torch.tensor([get_val(x) for x in s_info], dtype=torch.long, device=device)
 
     return p_index, p_info, s_index, s_info
-
-
-def get_outside_encoded_index(length, offset_cache=None, cuda=False):
-    if offset_cache is None:
-        offset_cache = get_offset_cache(length)
-    index = OutsideIndex()
-
-    outside_leaf = {}
-    node2leaf = index.get_leaf(length)
-
-    device = torch.cuda.current_device() if cuda else None
-
-    for (lvl, pos), leaf in node2leaf.items():
-        offset = offset_cache[lvl]
-        idx = offset + pos
-        leaf = torch.tensor(leaf, dtype=torch.long, device=device)
-        outside_leaf[idx] = leaf
-
-    return outside_leaf
-
-
-def get_outside_target(length, level, offset_cache=None, cuda=False):
-    if offset_cache is None:
-        offset_cache = get_offset_cache(length)
-
-    L = length - level
-    offset = offset_cache[level]
-
-    target = []
-    for i in range(L-1):
-        target.extend(range(offset, offset + L))
-
-    device = torch.cuda.current_device() if cuda else None
-    target = torch.tensor(target, dtype=torch.long, device=device)
-    return target
-

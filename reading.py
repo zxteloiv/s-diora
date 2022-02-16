@@ -43,7 +43,6 @@ WSJ_CONSTITUENCY_MAPPING_WITHOUT_POS = {k: v for k, v in WSJ_CONSTITUENCY_MAPPIN
 INVERSE_CONSTITUENCY_MAPPING_WITHOUT_POS = {v: k for k, v in WSJ_CONSTITUENCY_MAPPING_WITHOUT_POS.items()}
 WSJ_CONSTITUENCY_MAPPING_ONLY_POS = {k: v for k, v in WSJ_CONSTITUENCY_MAPPING.items() if k in WSJ_POS_MAPPING}
 INVERSE_CONSTITUENCY_MAPPING_ONLY_POS = {v: k for k, v in WSJ_CONSTITUENCY_MAPPING_ONLY_POS.items()}
-# IGNORED_TAGS = (",", ":", "``", "''", ".")
 
 
 class Node(object):
@@ -113,12 +112,10 @@ def add_null_spans(span_lst, binary_tree):
             pos, size = sp
             if size == 1:
                 span_lst.append((pos, size, WSJ_CONSTITUENCY_MAPPING['-NONE-POS-']))
-                #print('[read] add -NONE-POS-')
             else:
                 span_lst.append((pos, size, WSJ_CONSTITUENCY_MAPPING['-NONE-']))
         else:
             pos, size = sp
-            #print('[read] [single] found {}'.format(INVERSE_CONSTITUENCY_MAPPING[span_to_label[(pos, size)]]))
     return span_lst
 
 
@@ -313,55 +310,6 @@ def get_spans(tree):
     return spans
 
 
-class BaseTextReader(object):
-    def __init__(self, lowercase=True, filter_length=0, include_id=False):
-        self.lowercase = lowercase
-        self.filter_length = filter_length if filter_length is not None else 0
-        self.include_id = include_id
-
-    def read(self, filename):
-        return self.read_sentences(filename)
-
-    def read_sentences(self, filename):
-        sentences = []
-        extra = dict()
-
-        if self.include_id:
-            extra['example_ids'] = []
-
-        with open(filename) as f:
-            for line in tqdm(f, desc='read'):
-                for s in self.read_line(line):
-                    if self.filter_length > 0 and len(s) > self.filter_length:
-                        continue
-                    if self.include_id:
-                        sid = s[0]
-                        s = s[1:]
-                        extra['example_ids'].append(sid)
-                    sentences.append(s)
-
-        return {
-            "sentences": sentences,
-            "extra": extra
-            }
-
-    def read_line(self, line):
-        raise NotImplementedError
-
-
-class PlainTextReader(BaseTextReader):
-    r"""A class for reading files where each line is delimited by a symbol (default is ' ').
-    """
-
-    def __init__(self, lowercase=True, filter_length=0, delim=' ', include_label=None, include_id=False):
-        super(PlainTextReader, self).__init__(lowercase=lowercase, filter_length=filter_length, include_id=include_id)
-        self.delim = delim
-
-    def read_line(self, line):
-        example = line.strip().split(self.delim)
-        yield example
-
-
 class WSJEMNLPReader(object):
     def __init__(self, lowercase=True, filter_length=0, for_nopunct=False):
         self.lowercase = lowercase
@@ -406,7 +354,6 @@ class WSJEMNLPReader(object):
         return list(result.items())
 
     def indexify_constituency_tags(self, constituency_tags):
-        mapping = {}
         def helper(d):
             for span, label_lst in d:
                 assert isinstance(label_lst, (list, tuple))
@@ -426,9 +373,8 @@ class WSJEMNLPReader(object):
                 else:
                     key = label_lst[0]
                 label = WSJ_CONSTITUENCY_MAPPING_WITHOUT_POS.get(key, '-NONE-')
-                yield (pos, size, label)
+                yield pos, size, label
         constituency_tags = [list(helper(d)) for d in constituency_tags]
-        mapping = {k: i for i, k in enumerate(sorted(mapping.keys()))}
         return constituency_tags
 
     def indexify_pos_tags(self, pos_tag_lst):
@@ -448,9 +394,9 @@ class WSJEMNLPReader(object):
                 tokens = data['tokens']
 
                 if self.for_nopunct:
-                    if self.filter_length > 0 and len(data['tokens_no_punct']) > self.filter_length:
+                    if 0 < self.filter_length < len(data['tokens_no_punct']):
                         continue
-                elif self.filter_length > 0 and len(tokens) > self.filter_length:
+                elif 0 < self.filter_length < len(tokens):
                     continue
                 nltk_tree = nltk.Tree.fromstring(data['raw_parse'])
                 binary_tree = data['binary_tree']
@@ -478,20 +424,11 @@ class WSJEMNLPReader(object):
         extra['constituency_tags'] = constituency_tags
         extra['pos_tags'] = pos_tags
 
-        metadata = {}
-        metadata['n_etypes'] = 0
-        metadata['etype2idx'] = {}
-        metadata['tag2idx'] = WSJ_POS_MAPPING
-
         self.logger.info('pos tags = {}'.format(WSJ_POS_MAPPING))
         self.logger.info('# of pos tags = {}'.format(len(WSJ_POS_MAPPING)))
 
         self.logger.info('constituency tags = {}'.format(WSJ_CONSTITUENCY_MAPPING))
         self.logger.info('# of constituency tags = {}'.format(len(WSJ_CONSTITUENCY_MAPPING)))
 
-        return {
-            "sentences": sentences,
-            "extra": extra,
-            "metadata": metadata,
-            }
+        return {"sentences": sentences, "extra": extra}
 

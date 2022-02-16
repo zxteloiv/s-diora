@@ -22,70 +22,6 @@ class InsideIndex(object):
         return pairs
 
 
-class InsideIndexCheck(object):
-    def __init__(self, index, length, spans, siblings):
-        sib_map = {}
-        for x, y, n in siblings:
-            sib_map[x] = (y, n)
-            sib_map[y] = (x, n)
-
-        check = {}
-        for sibling, (target, name) in sib_map.items():
-            xpos = target[0]
-            xsize = target[1] - target[0]
-            xlevel = xsize - 1
-            xoffset = index.get_offset(length)[xlevel]
-            xidx = xoffset + xpos
-
-            spos = sibling[0]
-            ssize = sibling[1] - sibling[0]
-            slevel = ssize - 1
-            soffset = index.get_offset(length)[slevel]
-            sidx = soffset + spos
-
-            check[(xidx, sidx)] = True
-        self.check = check
-
-    def is_valid(self, xidx, sidx):
-        return (xidx, sidx) in self.check
-
-
-def get_inside_index_unique(length, level, offset_cache=None, cuda=False):
-    if offset_cache is None:
-        offset_cache = get_offset_cache(length)
-    index = InsideIndex()
-    pairs = index.get_all_pairs(level, length)
-
-    L = length - level
-    n_constituents = len(pairs) // L
-    idx_set = set()
-
-    for i in range(n_constituents):
-        lvl_l = i
-        lvl_r = level - i - 1
-        lstart, lend = 0, L
-        rstart, rend = length - L - lvl_r, length - lvl_r
-
-        if lvl_l < 0:
-            lvl_l = length + lvl_l
-        if lvl_r < 0:
-            lvl_r = length + lvl_r
-
-        for pos in range(lstart, lend):
-            offset = offset_cache[lvl_l]
-            idx = offset + pos
-            idx_set.add(idx)
-
-        for pos in range(rstart, rend):
-            offset = offset_cache[lvl_r]
-            idx = offset + pos
-            idx_set.add(idx)
-
-    device = torch.cuda.current_device() if cuda else None
-    idx_lst = torch.tensor(list(idx_set), dtype=torch.int64, device=device).flatten()
-    return idx_lst
-
-
 def get_inside_components(length, level, offset_cache=None):
     if offset_cache is None:
         offset_cache = get_offset_cache(length)
@@ -137,6 +73,19 @@ def get_inside_components(length, level, offset_cache=None):
     return output
 
 
+def build_inside_component_lookup(index, batch_info):
+    offset_cache = index.get_offset(batch_info.length)
+    components = get_inside_components(batch_info.length, batch_info.level, offset_cache)
+
+    component_lookup = {}
+    for idx, (_, _, x_span, l_span, r_span) in enumerate(components):
+        for j, (x_level, x_pos) in enumerate(x_span):
+            l_level, l_pos = l_span[j]
+            r_level, r_pos = r_span[j]
+            component_lookup[(x_pos, idx)] = (l_level, l_pos, r_level, r_pos)
+    return component_lookup
+
+
 def get_inside_index(length, level, offset_cache=None, cuda=False):
     components = get_inside_components(length, level, offset_cache)
 
@@ -147,10 +96,8 @@ def get_inside_index(length, level, offset_cache=None, cuda=False):
         idx_r.append(index_r)
 
     device = torch.cuda.current_device() if cuda else None
-    idx_l = torch.tensor(idx_l, dtype=torch.int64, device=device
-            ).transpose(0, 1).contiguous().flatten()
-    idx_r = torch.tensor(idx_r, dtype=torch.int64, device=device
-            ).transpose(0, 1).contiguous().flatten()
+    idx_l = torch.tensor(idx_l, dtype=torch.int64, device=device).transpose(0, 1).contiguous().flatten()
+    idx_r = torch.tensor(idx_r, dtype=torch.int64, device=device).transpose(0, 1).contiguous().flatten()
 
     return idx_l, idx_r
 

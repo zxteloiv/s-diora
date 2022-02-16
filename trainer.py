@@ -1,10 +1,4 @@
 import collections
-import copy
-import json
-import os
-import sys
-import traceback
-import types
 
 import torch
 import torch.nn as nn
@@ -12,40 +6,7 @@ import torch.optim as optim
 
 import numpy as np
 
-from allennlp.nn.util import add_positional_features
-
 from experiment_logger import get_logger
-from embeddings import initialize_word2idx
-from help_get_net_components import check_params, nested_getattr
-
-
-def default_getattr(o, k, default=None):
-    if not hasattr(o, k):
-        return default
-    return getattr(o, k)
-
-
-def nested_getattr(o, k):
-    k_lst = k.split('.')
-    for i in range(len(k_lst)):
-        o = getattr(o, k_lst[i])
-    return o
-
-
-def nested_hasattr(o, k):
-    try:
-        _ = nested_getattr(o, k)
-        return True
-    except:
-        return False
-
-
-def nested_setattr(o, k, v):
-    k_lst = k.split('.')
-    if len(k_lst) > 1:
-        new_k = '.'.join(k_lst[:-1])
-        o = nested_getattr(o, new_k)
-    setattr(o, k_lst[-1], v)
 
 
 class Net(nn.Module):
@@ -72,7 +33,7 @@ class Net(nn.Module):
     def is_cuda(self):
         return self.diora.is_cuda
 
-    def compute_loss(self, batch, diora, info, embed, name_filter=None):
+    def compute_loss(self, batch, diora, info, name_filter=None):
         device = torch.cuda.current_device() if self.is_cuda else None
         info['net'] = self
         ret, loss = {}, []
@@ -84,9 +45,9 @@ class Net(nn.Module):
         # Loss
         for func_name in func_name_lst:
             func = getattr(self, func_name)
-            if default_getattr(func, 'skip', False):
+            if getattr(func, 'skip', False):
                 continue
-            subloss, desc = func(batch, diora, info, embed)
+            subloss, desc = func(batch, diora, info)
             loss.append(subloss.view(1, 1))
             for k, v in desc.items():
                 ret[k] = v
@@ -116,9 +77,9 @@ class Net(nn.Module):
         if isinstance(compute_loss, (tuple, list, str)):
             if isinstance(compute_loss, str):
                 compute_loss = [compute_loss]
-            ret, loss = self.compute_loss(batch, diora=diora, info=info, embed=embed, name_filter=compute_loss)
+            ret, loss = self.compute_loss(batch, diora=diora, info=info, name_filter=compute_loss)
         elif compute_loss:
-            ret, loss = self.compute_loss(batch, diora=diora, info=info, embed=embed)
+            ret, loss = self.compute_loss(batch, diora=diora, info=info)
         else:
             ret, loss = {}, torch.full((1, 1), 1, dtype=torch.float, device=device)
 
@@ -241,7 +202,6 @@ class Trainer(object):
         # Remove extra keys.
         keys = list(state_dict_toload.keys())
         for k in keys:
-            # print('state_dict[load]', k, k in state_dict_net)
             if k not in state_dict_net:
                 print('deleting (missing from state_dict) {}'.format(k))
                 del state_dict_toload[k]
@@ -275,7 +235,6 @@ class Trainer(object):
         net = self.net
 
         out = net(batch, compute_loss=compute_loss, info=info)
-
         return out
 
     def gradient_update(self, loss):
@@ -385,7 +344,6 @@ def build_net(options, context=dict(), net_components=dict()):
 
     # Context.
     cuda = context['cuda']
-    lr = options.lr
     word2idx = context['word2idx']
 
     # Net

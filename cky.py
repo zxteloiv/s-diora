@@ -1,5 +1,3 @@
-import json
-
 import torch
 
 
@@ -29,7 +27,7 @@ class ParsePredictor(object):
 
         return out
 
-    def parse_batch(self, batch, cell_loss=False, return_components=False):
+    def parse_batch(self, batch):
         batch_size = self.net.batch_size
         length = self.net.length
         scalars = self.net.cache['inside_s_components'].copy()

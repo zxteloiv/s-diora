@@ -1,12 +1,8 @@
 from dataloader import FixedLengthBatchSampler, SimpleDataset
 from experiment_logger import get_logger
-
-from allennlp.modules.elmo import Elmo, batch_to_ids
-
 import torch
 import numpy as np
-import json
-from tqdm import tqdm
+import torch.utils.data
 
 
 def get_config(config, **kwargs):
@@ -41,13 +37,6 @@ def get_default_config():
     return default_config
 
 
-def indexify(raw_sentences, word2idx):
-    def func():
-        for s in raw_sentences:
-            yield [word2idx[w] for w in s]
-    return torch.LongTensor(list(func()))
-
-
 class BatchIterator(object):
 
     def __init__(self, sentences, extra={}, **kwargs):
@@ -58,46 +47,14 @@ class BatchIterator(object):
         self.cuda = config.get('cuda')
         self.logger = get_logger()
 
-    def id2raw(self, batch):
-        word2idx = self.config['word2idx']
-        idx2word = {v: k for k, v in word2idx.items()}
-        def convert(s):
-            return [idx2word[w] for w in s]
-        xs = batch.tolist()
-        ws = [convert(s) for s in xs]
-        return ws
-
-    def get_dataset_size(self):
-        return len(self.sentences)
-
-    def get_dataset_minlen(self):
-        return min(map(len, self.sentences))
-
-    def get_dataset_maxlen(self):
-        return max(map(len, self.sentences))
-
-    def get_dataset_stats(self):
-        return 'size={} minlen={} maxlen={}'.format(
-            self.get_dataset_size(), self.get_dataset_minlen(), self.get_dataset_maxlen()
-        )
-
-    def get_vectors(self, *args, **kwargs):
-        return self.vector_cache.get_vectors(*args, **kwargs)
-
-    def save_vectors(self, *args, **kwargs):
-        self.vector_cache.save_vectors(*args, **kwargs)
-
     def get_iterator(self, **kwargs):
         config = get_config(self.config.copy(), **kwargs)
 
         random_seed = config.get('random_seed')
         batch_size = config.get('batch_size')
-        filter_length = config.get('filter_length')
         include_partial = config.get('include_partial')
         cuda = config.get('cuda')
-        workers = config.get('workers')
 
-        epoch = kwargs.get('epoch', 0)
         length_limit = 1000
 
         def collate_fn(batch):
@@ -118,14 +75,12 @@ class BatchIterator(object):
             dataset = SimpleDataset(self.sentences)
             sampler = FixedLengthBatchSampler(dataset, batch_size=batch_size, rng=rng,
                 include_partial=include_partial)
-            # TODO: workers
-            loader = torch.utils.data.DataLoader(dataset, shuffle=(sampler is None), num_workers=2, batch_sampler=sampler, collate_fn=collate_fn)
+            loader = torch.utils.data.DataLoader(dataset, shuffle=(sampler is None), num_workers=0, batch_sampler=sampler, collate_fn=collate_fn)
             self.loader = loader
 
         def myiterator():
 
             for i, batch in enumerate(self.loader):
-                index = batch['index']
                 sentences = batch['sents']
 
                 batch_size, length = sentences.shape

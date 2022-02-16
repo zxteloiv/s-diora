@@ -12,6 +12,7 @@ from experiment_logger import get_logger
 class FixedLengthBatchSampler(Sampler):
 
     def __init__(self, data_source, batch_size, include_partial=False, rng=None):
+        super().__init__(data_source)
         self.data_source = data_source
         self.active = False
         if rng is None:

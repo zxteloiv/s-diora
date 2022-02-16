@@ -1,5 +1,3 @@
-import torch
-
 from dataset import ReconstructDataset, make_batch_iterator
 from dataset import ConsolidateDatasets
 

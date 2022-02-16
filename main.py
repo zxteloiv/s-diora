@@ -1,5 +1,4 @@
 import argparse
-import copy
 import datetime
 import math
 import json
@@ -11,19 +10,15 @@ import uuid
 import numpy as np
 
 import torch
-import torch.nn as nn
 
 from help_get_eval_components import get_eval_components, ModelEvaluation
 from help_get_net_components import get_net_components
 
-from dataset_utils import get_train_dataset
 from dataset_utils import get_train_iterator
-from dataset_utils import get_validation_dataset
 from dataset_utils import get_validation_iterator
 from dataset_utils import get_train_and_validation
-from trainer import build_net as trainer_build_net
+from trainer import build_net
 
-from flags import stringify_flags, init_with_flags_file, save_flags
 from experiment_logger import ExperimentLogger, configure_experiment, get_logger
 
 
@@ -36,7 +31,7 @@ def save_experiment(experiment_file, metadata):
         f.write(json.dumps(metadata, indent=4, sort_keys=True))
 
 
-def build_net(options, embeddings, batch_iterator=None, word2idx=None):
+def build_trainer(options, embeddings, batch_iterator=None, word2idx=None):
 
     cuda = options.cuda
 
@@ -48,7 +43,7 @@ def build_net(options, embeddings, batch_iterator=None, word2idx=None):
 
     net_components = get_net_components(options, context)
 
-    trainer = trainer_build_net(options, context=context, net_components=net_components)
+    trainer = build_net(options, context=context, net_components=net_components)
 
     logger = get_logger()
     logger.info('# of params = {}'.format(count_params(trainer.net)))
@@ -92,42 +87,30 @@ class MyTrainIterator(object):
         for epoch, seed in zip(range(options.max_epoch), seeds):
             logger.info('epoch={} seed={}'.format(epoch, seed))
             it = self.batch_iterator.get_iterator(random_seed=seed, epoch=epoch)
-            wrap_it = self.get_iterator_standard(it)
-
-            def wrap_again(it):
-                last_batch_idx, last_batch_map, end_of_epoch = None, None, False
-                for batch_idx, batch_map in it:
-                    if last_batch_idx is not None:
-                        yield last_batch_idx, last_batch_map, end_of_epoch
-                    last_batch_idx, last_batch_map = batch_idx, batch_map
-                end_of_epoch = True
-                yield last_batch_idx, last_batch_map, end_of_epoch
-
-            for epoch_step, (batch_idx, batch_map, end_of_epoch) in enumerate(wrap_again(wrap_it)):
-                should = {}
-                should['end_of_epoch'] = end_of_epoch
-                should['log'] = step % options.log_every_batch == 0
-                should['periodic'] = step % options.save_latest == 0 and step >= options.save_after
-                should['distinct'] = step % options.save_distinct == 0 and step >= options.save_after
-
-                should_eval = (
-                    options.eval_every_batch > 0 and
-                    step % options.eval_every_batch == 0 and
-                    step >= options.eval_after
-                    )
-                should_eval = should_eval or (
-                    end_of_epoch and
-                    epoch % options.eval_every_epoch == 0 and
-                    step >= options.eval_after
-                    )
-                should['eval'] = should_eval
+            wrapped = self.wrap_again(self.get_iterator_standard(it))
+            for epoch_step, (batch_idx, batch_map, end_of_epoch) in enumerate(wrapped):
+                should_eval = end_of_epoch and epoch % options.eval_every_epoch == 0 and step >= options.eval_after
+                should = {'end_of_epoch': end_of_epoch,
+                          'log': step % options.log_every_batch == 0,
+                          'periodic': step % options.save_latest == 0 and step >= options.save_after,
+                          'distinct': step % options.save_distinct == 0 and step >= options.save_after,
+                          'eval': should_eval}
 
                 yield epoch, step, batch_idx, batch_map, should
                 step += 1
 
-                if options.max_step >= 0 and step >= options.max_step:
+                if 0 <= options.max_step <= step:
                     logger.info('Max-Step={} Quitting.'.format(options.max_step))
                     sys.exit()
+
+    def wrap_again(self, it):
+        last_batch_idx, last_batch_map, end_of_epoch = None, None, False
+        for batch_idx, batch_map in it:
+            if last_batch_idx is not None:
+                yield last_batch_idx, last_batch_map, end_of_epoch
+            last_batch_idx, last_batch_map = batch_idx, batch_map
+        end_of_epoch = True
+        yield last_batch_idx, last_batch_map, end_of_epoch
 
     def get_iterator_standard(self, it):
         count = 0
@@ -234,7 +217,6 @@ def run_train(options, train_iterator, trainer, model_evaluation):
 
 def run(options):
     logger = get_logger()
-    experiment_logger = ExperimentLogger()
 
     train_dataset, validation_dataset = get_train_and_validation(options)
     train_iterator = get_train_iterator(options, train_dataset)
@@ -243,7 +225,7 @@ def run(options):
     word2idx = train_dataset['word2idx']
 
     logger.info('Initializing model.')
-    trainer = build_net(options, embeddings, train_iterator, word2idx=word2idx)
+    trainer = build_trainer(options, embeddings, train_iterator, word2idx=word2idx)
     logger.info('Model:')
     for name, p in trainer.net.named_parameters():
         logger.info('{} {} {}'.format(name, p.shape, p.requires_grad))
@@ -253,7 +235,6 @@ def run(options):
     context['dataset'] = validation_dataset
     context['batch_iterator'] = validation_iterator
     model_evaluation = ModelEvaluation(get_eval_components(options, context, config_lst=options.eval_config))
-
 
     if options.eval_only_mode:
         info = dict()
@@ -313,6 +294,7 @@ def argument_parser():
 
     # Evaluation.
     parser.add_argument('--eval_every_batch', default=1000, type=int)
+    parser.add_argument('--eval_every_epoch', default=10, type=int)
     parser.add_argument('--eval_after', default=0, type=int)
     parser.add_argument('--eval_config', default=None, action='append')
 
@@ -411,6 +393,17 @@ def parse_args(parser):
 
 
 def configure(options):
+    def stringify_flags(options):
+        # Ignore negative boolean flags.
+        flags = {k: v for k, v in options.__dict__.items()}
+        return json.dumps(flags, indent=4, sort_keys=True)
+
+    def save_flags(options, experiment_path):
+        flags = stringify_flags(options)
+        target_file = os.path.join(experiment_path, 'flags.json')
+        with open(target_file, 'w') as f:
+            f.write(flags)
+
     # Configure output paths for this experiment.
     configure_experiment(options.experiment_path)
 

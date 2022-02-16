@@ -1,13 +1,5 @@
 import torch
 import torch.nn as nn
-import numpy as np
-
-from hard_diora import ChartUtil, get_outside_chart_cfg, outside_fill_chart
-from hard_diora import build_outside_chart
-from hard_diora import build_inside_correction, build_outside_correction
-from diora import get_inside_components, get_outside_components
-
-from loss_func_utils import scores_for_cross_entropy, cross_entropy
 
 
 class SupervisedParsingLoss(nn.Module):
@@ -56,10 +48,7 @@ class GreedyReconstruct(nn.Module):
                  reconstruct_loss=None, train_tree=True, margin=1, print_match=False):
         super().__init__()
         self.reconstruct_loss = reconstruct_loss
-        self.embeddings = embeddings
         self.margin = margin
-        self.mat = nn.Parameter(torch.FloatTensor(size, input_size))
-        self.size = size
         self.weight = weight
         self._cuda = cuda
 
@@ -75,31 +64,18 @@ class GreedyReconstruct(nn.Module):
         return cls(**kwargs_dict)
 
     def reset_parameters(self):
-        self.mat.data.normal_()
+        pass
 
-    def reconstruct(self, sentences, cell, embeddings, mat, info):
-        if self.reconstruct_loss is not None:
-            loss_func = getattr(info['net'], self.reconstruct_loss)
-            return loss_func.reconstruct(sentences, cell, embeddings, mat)
+    def reconstruct(self, sentences, cell, info):
+        loss_func = getattr(info['net'], self.reconstruct_loss)
+        return loss_func.reconstruct(sentences, cell)
 
+    def forward_helper(self, sentences, diora, info):
         batch_size, length = sentences.shape
-        score = scores_for_cross_entropy(sentences, cell, embeddings, mat)
-        xent = cross_entropy(sentences, score).view(batch_size, length)
-        return xent
-
-    def forward_helper(self, sentences, diora, info, embed=None):
-        device = torch.cuda.current_device() if self._cuda else None
-        batch_size, length = sentences.shape
-        size = self.size
-        embeddings = self.embeddings
-        mat = self.mat
-        K = diora.K
 
         # Maximize the reconstruction (wp_loss).
         cell0 = diora.chart['outside_h'][:, :length]
-        cell1 = diora.charts[1]['outside_h'][:, :length]
-        xent0 = self.reconstruct(sentences, cell0, embeddings, mat, info)
-        xent1 = self.reconstruct(sentences, cell1, embeddings, mat, info)
+        xent0 = self.reconstruct(sentences, cell0, info)
         wp_loss = xent0.mean()
         loss = wp_loss
 
@@ -115,6 +91,5 @@ class GreedyReconstruct(nn.Module):
 
     def forward(self, *args, **kwargs):
         loss = self.forward_helper(*args, **kwargs)
-        ret = {}
-        ret[self.name] = self.weight * loss
+        ret = {self.name: self.weight * loss}
         return loss, ret
