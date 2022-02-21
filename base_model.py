@@ -95,6 +95,7 @@ class DioraBase(nn.Module):
         return h
 
     def inside_pass(self):
+        # span length from 1 up to max length
         for level in range(1, self.length):
             batch_info = BatchInfo(
                 batch_size=self.batch_size,
@@ -138,12 +139,14 @@ class DioraBase(nn.Module):
         info = info or dict()
         self.batch_size, self.length, _ = h.shape
         self.outside = info.get('outside', self.default_outside)
+        # the chart size is (batch, num_chart_cells, size)
+        # set the leaf charts to the transformed hidden states
         self.inside_h[:, :self.length] = h
         self.cache['inside_tree'] = {}
         for i in range(self.batch_size):
             for i_k in range(self.K):
                 tree = {}
-                level = 0
+                level = 0   # lowest or substring length ? every cell up to length is set to empty
                 for pos in range(self.length):
                     tree[(level, pos)] = []
                 self.cache['inside_tree'][(i, i_k)] = tree
@@ -158,7 +161,6 @@ class DioraBase(nn.Module):
     def reset(self):
         self.batch_size = None
         self.length = None
-        self.batch_info = None
 
         if self.chart is not None:
             keys = list(self.chart.keys())
@@ -187,6 +189,7 @@ class DioraBase(nn.Module):
         self.reset()
         self.initialize(x)
 
+        # leaf linear + tanh transform + normalize to unit length
         h = self.leaf_transform(x)
 
         self.init_with_batch(h, info)

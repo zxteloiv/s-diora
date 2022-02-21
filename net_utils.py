@@ -37,6 +37,7 @@ class BatchInfo(object):
 
 
 def build_chart(batch_size, length, size, dtype=None, cuda=False):
+    # triangle area: length * (length + 1) / 2 = 55 if length = 10
     ncells = int(length * (1 + length) / 2)
     device = torch.cuda.current_device() if cuda else None
 
