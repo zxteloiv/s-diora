@@ -2,14 +2,13 @@ import torch
 import torch.nn as nn
 from base_model import DioraBase
 
-TINY = 1e-8
-
 from net_utils import get_inside_states, inside_fill_chart
 from net_utils import get_outside_states, outside_fill_chart
 
+
 # Composition Functions
 class ComposeMLP(nn.Module):
-    def __init__(self, size, activation, n_layers=2, leaf=False, side_1_size=None, side_2_size=None):
+    def __init__(self, size, activation, n_layers=2, leaf=False):
         super(ComposeMLP, self).__init__()
 
         self.size = size
@@ -20,14 +19,6 @@ class ComposeMLP(nn.Module):
             self.V = nn.Parameter(torch.FloatTensor(self.size, self.size))
         self.W = nn.Parameter(torch.FloatTensor(2 * self.size, self.size))
         self.B = nn.Parameter(torch.FloatTensor(self.size))
-
-        self.side_1_size = side_1_size
-        if side_1_size is not None:
-            self.W_side_1 = nn.Parameter(torch.FloatTensor(side_1_size, self.size))
-
-        self.side_2_size = side_2_size
-        if side_2_size is not None:
-            self.W_side_2 = nn.Parameter(torch.FloatTensor(side_2_size, self.size))
 
         for i in range(1, n_layers):
             setattr(self, 'W_{}'.format(i), nn.Parameter(torch.FloatTensor(self.size, self.size)))
@@ -52,13 +43,9 @@ class ComposeMLP(nn.Module):
         h = torch.tanh(torch.matmul(x, self.V) + self.B)
         return h
 
-    def forward(self, hs, constant=1.0, side_1=None, side_2=None):
+    def forward(self, hs):
         input_h = torch.cat(hs, 1)
         h = torch.matmul(input_h, self.W)
-        if side_1 is not None:
-            h = h + torch.matmul(side_1, self.W_side_1)
-        if side_2 is not None:
-            h = h + torch.matmul(side_2, self.W_side_2)
         h = self.activation(h + self.B)
         for i in range(1, self.n_layers):
             W = getattr(self, 'W_{}'.format(i))
@@ -106,12 +93,7 @@ class DioraMLP(DioraBase):
         # Model parameters for transformation required at both input and output
         self.inside_score_func = Bilinear(self.size)
         self.outside_score_func = Bilinear(self.size)
-
-        if self.compress:
-            self.root_mat_out = nn.Parameter(torch.FloatTensor(self.size, self.size))
-        else:
-            self.root_vector_out_h = nn.Parameter(torch.FloatTensor(self.size))
-        self.root_vector_out_c = None
+        self.root_vector_out_h = nn.Parameter(torch.FloatTensor(self.size))
 
         self.inside_compose_func = ComposeMLP(self.size, self.activation, n_layers=self.n_layers, leaf=True)
         self.outside_compose_func = ComposeMLP(self.size, self.activation, n_layers=self.n_layers)
@@ -152,7 +134,7 @@ class DioraMLP(DioraBase):
         ps, ss = get_outside_states(
             batch_info, chart['outside_s'], chart['inside_s'], index, 1)
 
-        h = self.outside_compose_func([sh, ph], 0)
+        h = self.outside_compose_func([sh, ph])
         xs = self.outside_score_func(sh, ph)
 
         s = xs + ss + ps

@@ -122,8 +122,6 @@ class ChartUtil(nn.Module):
 
         K = self.topk
 
-        l_prod, r_prod, pairs = self.get_tensor_product_mask(K)
-
         component_lookup = build_inside_component_lookup(index, batch_info)
 
         # DIORA.
@@ -145,10 +143,11 @@ class ChartUtil(nn.Module):
         # out : (B, L, N, K, K)
         lh = torch.cat([CH['lh'][i].view(B, L, N, 1, size) for i in range(K)], 3)
         rh = torch.cat([CH['rh'][i].view(B, L, N, size, 1) for i in range(K)], 4)
-        s_raw = torch.matmul(torch.matmul(lh, mat), rh)
+        s_raw = torch.matmul(torch.matmul(lh, mat), rh)     # a bilinear layer for the states
+
+        l_prod, r_prod, pairs = self.get_tensor_product_mask(K)
         select_ls = torch.tensor(l_prod, dtype=torch.float, device=device)
         select_rs = torch.tensor(r_prod, dtype=torch.float, device=device)
-
         # a : (B, L, N, K)
         # b : (B, L, N, K)
         ls = torch.cat([CH['ls'][i].view(B, L, N, 1) for i in range(K)], 3)
@@ -157,7 +156,6 @@ class ChartUtil(nn.Module):
         combo_rs = torch.matmul(rs, select_rs).view(B, L, N * K * K, 1)
         combo_s = s_raw.view(B, L, N * K * K, 1)
         s = combo_s + combo_ls + combo_rs
-        local_s = combo_s
 
         # We should not include any split that includes an in-complete beam.
         def penalize_incomplete_splits():
@@ -254,11 +252,8 @@ class ChartUtil(nn.Module):
             result.setdefault('h', []).append(topk_h[:, :, i])
             result.setdefault('s', []).append(topk_s[:, :, i])
 
-        topk_s_local = local_s.gather(index=topk_idx, dim=2)
-
         result['topk_h'] = topk_h
         result['topk_s'] = topk_s
-        result['topk_s_local'] = topk_s_local
         result['topk_n_idx'] = topk_n_idx
         result['topk_lk'] = topk_lk
         result['topk_rk'] = topk_rk
@@ -379,7 +374,7 @@ class ChartUtil(nn.Module):
         # TODO: If possible, remove this transpose. Although this approach still has less transpose than previously.
         sel_sh = sh.transpose(3, 4).reshape(B, L, N * K, size).gather(dim=2, index=topk_s_idx.expand(B, L, K, size)).view(-1, size)
 
-        topk_h = compose_func([sel_ph, sel_sh], 0).view(B, L, K, size)
+        topk_h = compose_func([sel_ph, sel_sh]).view(B, L, K, size)
         topk_h = normalize_func(topk_h)
 
         # We should not add more than the number of possible trees to the beam.
@@ -430,7 +425,6 @@ class DioraMLPWithTopk(DioraBase):
         self.outside_score_func = Bilinear(self.size)
         self.outside_compose_func = ComposeMLP(self.size, self.activation, n_layers=self.n_layers)
         self.root_vector_out_h = nn.Parameter(torch.FloatTensor(self.size))
-        self.root_vector_out_c = None
 
     def inside_func(self, batch_info):
         device = self.device

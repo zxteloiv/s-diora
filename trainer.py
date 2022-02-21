@@ -183,22 +183,6 @@ class Trainer(object):
                 state_dict_toload[newk] = state_dict_toload[k]
                 del state_dict_toload[k]
 
-        # Deprecated MLP.
-        keys = list(state_dict_toload.keys())
-        for k in keys:
-            newk = None
-            if k == 'diora.inside_compose_func.W_0':
-                newk = 'diora.inside_compose_func.W'
-            if k == 'diora.outside_compose_func.W_0':
-                newk = 'diora.outside_compose_func.W'
-            if k == 'diora.atten_func.mat':
-                newk = 'diora.atten_func.0.mat'
-            if newk is not None:
-                state_dict_toload[newk] = state_dict_toload[k]
-                del state_dict_toload[k]
-
-        state_dict_toload_copy = state_dict_toload.copy()
-
         # Remove extra keys.
         keys = list(state_dict_toload.keys())
         for k in keys:
