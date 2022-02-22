@@ -4,6 +4,8 @@ from base_model import DioraBase
 
 from net_utils import get_inside_states, inside_fill_chart
 from net_utils import get_outside_states, outside_fill_chart
+from inside_index import build_inside_component_lookup
+from net_utils import BatchInfo
 
 
 # Composition Functions
@@ -98,6 +100,10 @@ class DioraMLP(DioraBase):
         self.inside_compose_func = ComposeMLP(self.size, self.activation, n_layers=self.n_layers, leaf=True)
         self.outside_compose_func = ComposeMLP(self.size, self.activation, n_layers=self.n_layers)
 
+    def init_with_batch(self, h, info=None):
+        super().init_with_batch(h, info)
+        self.cache['inside_s_components'] = {i: {} for i in range(self.length)}
+
     def inside_func(self, batch_info):
         B = batch_info.batch_size
         L = batch_info.length - batch_info.level
@@ -120,7 +126,40 @@ class DioraMLP(DioraBase):
 
         inside_fill_chart(batch_info, chart, index, hbar, sbar)
 
+        self.private_inside_hook(batch_info.level, h, s, p, xs, ls, rs)
         return h, s, p, xs, ls, rs
+
+    def private_inside_hook(self, level, h, s, p, x_s, l_s, r_s):
+        """
+        This method is meant to be private, and should not be overriden.
+        Instead, override `inside_hook`.
+        """
+        if level == 0:
+            return
+
+        length = self.length
+        B = self.batch_size
+        L = length - level
+
+        x_s = x_s.view(*s.shape)
+        assert s.shape == (B, L, level, 1), s.shape
+        smax = s.max(dim=2, keepdim=True)[0]
+        s = s - smax
+
+        for pos in range(L):
+            self.cache['inside_s_components'][level][pos] = s[:, pos, :]
+
+        component_lookup = build_inside_component_lookup(self.index, BatchInfo(length=length, level=level))
+        argmax = x_s.argmax(dim=2)
+        for i_b in range(B):
+            for pos in range(L):
+                n_idx = argmax[i_b, pos].item()
+                l_level, l_pos, r_level, r_pos = component_lookup[(pos, n_idx)]
+
+                self.cache['inside_tree'][(i_b, 0)][(level, pos)] = \
+                    self.cache['inside_tree'][(i_b, 0)][(l_level, l_pos)] + \
+                    self.cache['inside_tree'][(i_b, 0)][(r_level, r_pos)] + \
+                    [(level, pos)]
 
     def outside_func(self, batch_info):
         index = self.index
@@ -147,6 +186,5 @@ class DioraMLP(DioraBase):
         sbar = torch.sum(s * p, 1)
 
         outside_fill_chart(batch_info, chart, index, hbar, sbar)
-
         return h, s, p, xs, ps, ss
 
